@@ -2,7 +2,7 @@ import axios from "axios";
 
 /* ---------- 创建 axios 实例 ---------- */
 export const api = axios.create({
-  baseURL: "http://localhost:8000",  // 后端地址，结尾不要斜杠
+  baseURL: "https://recordsystem.onrender.com/",  // 后端地址，结尾不要斜杠
   withCredentials: false,           // 若以后要带 cookie 再改
 });
 
