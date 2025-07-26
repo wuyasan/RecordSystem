@@ -28,3 +28,11 @@ export const deleteFigure = (id) => api.delete(`/figures/${id}`);
 
 export const inbound  = (data) => api.post("/stock/inbound",  data);
 export const outbound = (data) => api.post("/stock/outbound", data);
+
+// 对于图片，现已是绝对 URL，保留防御式写法
+export const apiJoin = (path) => {
+  if (!path) return "";
+  if (/^https?:\/\//i.test(path)) return path;
+  const BASE = String(base).replace(/\/+$/, "");
+  return `${BASE}${path.startsWith("/") ? path : `/${path}`}`;
+};

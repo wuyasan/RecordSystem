@@ -108,7 +108,7 @@ export default function FigureTable() {
             <React.Fragment key={r.id}>
               {/* 主行 */}
               <tr>
-                <td>{r.image_url && <img src={`http://localhost:8000${r.image_url}`} />}</td>
+                <td>{r.image_url && <img src={r.image_url} />}</td>
                 <td>{r.manufacturer}</td><td>{r.brand}</td><td>{r.character}</td><td>{r.model_name}</td>
                 <td>{r.ip || "-"}</td>
                 <td>{r.cost_price}</td><td>{r.qty}</td><td>{r.total_sales.toFixed(2)}</td>

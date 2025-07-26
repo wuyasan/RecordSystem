@@ -1,0 +1,46 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: figures_db
+    environment:
+      POSTGRES_DB: figures
+      POSTGRES_USER: figures_app
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      TZ: ${TZ}
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    container_name: figures_backend
+    environment:
+      TZ: ${TZ}
+      DATABASE_URL: postgresql+psycopg2://figures_app:${PG_PASSWORD}@db:5432/figures
+    volumes:
+      # 把宿主机 /volume1/figures/static 挂到容器后端静态目录
+      - ./static:/app/backend/static
+    depends_on:
+      - db
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE: /api
+    container_name: figures_frontend
+    environment:
+      TZ: ${TZ}
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"     # 通过 http://NAS_IP:8080 访问前端
+    restart: unless-stopped
+
+networks:
+  default:
+    name: figures_net
