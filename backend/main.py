@@ -134,7 +134,7 @@ async def create_figure(
         data_bytes = await image.read()
         rsp = bucket.upload(
             obj_path,
-            io.BytesIO(data_bytes),
+            data_bytes,
             {"content-type": image.content_type or "application/octet-stream"},
         )
         if rsp.get("error"):
