@@ -137,8 +137,11 @@ async def create_figure(
             data_bytes,
             {"content-type": image.content_type or "application/octet-stream"},
         )
-        if rsp.get("error"):
-            raise HTTPException(500, f"Supabase 上传失败: {rsp['error']['message']}")
+        if rsp.error is not None:               # UploadResponse.error
+            raise HTTPException(
+                500,
+                f"Supabase 上传失败: {rsp.error.message}"
+            )
 
         # 3) 取公网 URL
         image_url = bucket.get_public_url(obj_path)
