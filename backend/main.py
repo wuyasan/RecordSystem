@@ -123,30 +123,38 @@ async def create_figure(
     filename = f"{uuid.uuid4()}{ext}"
     image_url: str
 
-    if supabase:                                      # 走 Supabase
+    if supabase:
+        bucket   = supabase.storage.from_(SUPABASE_BUCKET)
+        obj_path = f"images/{filename}"
+
+        # 1) 先尝试删除同名对象（若不存在也不会抛错）
+        bucket.remove([obj_path])
+
+        # 2) 再上传
         data_bytes = await image.read()
-        r = supabase.storage.from_(SUPABASE_BUCKET).upload(
-            f"images/{filename}",
+        rsp = bucket.upload(
+            obj_path,
             io.BytesIO(data_bytes),
-            { "content-type": image.content_type or "application/octet-stream" },
-            upsert=True,
+            {"content-type": image.content_type or "application/octet-stream"},
         )
-        if r.get("error"):
-            raise HTTPException(500, f"Supabase 上传失败: {r['error']['message']}")
-        image_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(
-            f"images/{filename}"
-        )
-        print(f"✓ Supabase 上传成功: images/{filename}\n  公网 URL: {image_url}")
-    else:                                             # 回退到本地 static/
+        if rsp.get("error"):
+            raise HTTPException(500, f"Supabase 上传失败: {rsp['error']['message']}")
+
+        # 3) 取公网 URL
+        image_url = bucket.get_public_url(obj_path)
+        print(f"✓ Supabase 上传成功: {obj_path}\n  公网 URL: {image_url}")
+
+    else:
+        # -------- 本地 static/ ----------
         dest = STATIC_DIR / filename
         with dest.open("wb") as f:
             shutil.copyfileobj(image.file, f)
         image_url = f"/static/{filename}"
         print(f"✓ 本地保存图片到: {dest}")
 
-    # ───────── 4. 创建 figure & 首次入库 ─────────
-    fig = crud.create_figure(db, data, image_url)
-    crud.add_movement(db, fig.id, quantity, "IN")
+        # ───────── 4. 创建 figure & 首次入库 ─────────
+        fig = crud.create_figure(db, data, image_url)
+        crud.add_movement(db, fig.id, quantity, "IN")
 
     return (
         schemas.Figure.from_orm(fig)
