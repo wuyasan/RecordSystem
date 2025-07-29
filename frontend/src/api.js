@@ -28,6 +28,7 @@ export const deleteFigure = (id) => api.delete(`/figures/${id}`);
 
 export const inbound  = (data) => api.post("/stock/inbound",  data);
 export const outbound = (data) => api.post("/stock/outbound", data);
+export const updateFigure = (id, data) => api.put(`/figures/${id}`, data);
 
 // 对于图片，现已是绝对 URL，保留防御式写法
 export const apiJoin = (path) => {

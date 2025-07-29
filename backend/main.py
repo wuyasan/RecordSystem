@@ -64,75 +64,97 @@ async def create_figure(
     character:    str = Form(...),
     model_name:   str = Form(...),
     cost_price:   float = Form(...),
-    ip: str | None      = Form(None),
-    image: UploadFile | None = File(None),
+    ip:           str | None = Form(None),
+
+    quantity:     int  = Form(1),                 # ★ 新增：首次入库数量
+    image:  UploadFile | None = File(None),
+
     db: Session = Depends(get_db),
 ):
-    # ---- 业务字段：用 payload，不要用 data 防止被文件字节覆盖
-    payload = dict(
-        manufacturer=manufacturer,
-        brand=brand,
-        character=character,
-        model_name=model_name,
-        cost_price=cost_price,
-        ip=ip,
+    """ ① 若已存在同款 → 直接给库存 +quantity  
+       ② 否则创建新品（必须上传图片），再写一条 IN 流水 """
+
+    data = dict(
+        manufacturer = manufacturer,
+        brand        = brand,
+        character    = character,
+        model_name   = model_name,
+        cost_price   = cost_price,
+        ip           = ip,
     )
 
-    # ---- 查重：完全相同则库存 +1 并返回最新汇总
-    existed = crud.get_same_figure(db, payload)
-    if existed:
-        crud.add_movement(db, existed.id, 1, "IN")
+    # ───────── 1. 查重：存在则只加库存 ─────────
+    fig = crud.get_same_figure(db, data)
+    if fig:
+        crud.add_movement(db, fig.id, quantity, "IN")
+
         stock, total_sales = (
             db.query(
                 func.coalesce(func.sum(models.StockMovement.quantity), 0),
                 func.coalesce(
                     func.sum(
-                        models.StockMovement.sale_price * (-models.StockMovement.quantity)
+                        models.StockMovement.sale_price *
+                        (-models.StockMovement.quantity)
                     ),
                     0,
                 ),
             )
-            .filter(models.StockMovement.figure_id == existed.id)
+            .filter(models.StockMovement.figure_id == fig.id)
             .one()
         )
-        return schemas.Figure.from_orm(existed).copy(
-            update={"qty": int(stock), "total_sales": float(total_sales)}
+
+        return (
+            schemas.Figure.from_orm(fig)
+            .copy(update={
+                "qty":         int(stock),
+                "total_sales": float(total_sales),
+            })
         )
 
-    # ---- 新品必须有图片
+    # ───────── 2. 新品校验 ─────────
+    if quantity <= 0:
+        raise HTTPException(400, "新品数量必须大于 0")
+
     if image is None or not image.filename.strip():
         raise HTTPException(400, "新品必须上传图片")
 
-    image_url: str | None = None
+    # ───────── 3. 保存图片（Supabase 优先，失败回本地） ─────────
+    ext      = pathlib.Path(image.filename).suffix
+    filename = f"{uuid.uuid4()}{ext}"
+    image_url: str
 
-    # 优先走 Supabase
-    if supabase:
-        file_bytes = await image.read()
-        ext = pathlib.Path(image.filename).suffix or ".jpg"
-        key = f"images/{uuid.uuid4()}{ext}"
-
-        # 上传
-        up = supabase.storage.from_(SUPABASE_BUCKET).upload(key, file_bytes)
-        # 这里不依赖 SDK 的返回结构，自己拼公开 URL
-        pub_url = supabase_public_url(key)
-        print(f"✓ Supabase 上传成功: {key}\n  公网 URL: {pub_url}")
-        image_url = pub_url
-
-        # 为了兼容后续逻辑，把文件指针复位（虽然之后不用）
-        image.file.seek(0)
-
-    # 若没配置 Supabase，则落地到本地 static
-    if image_url is None:
-        ext = pathlib.Path(image.filename).suffix
-        fname = f"{uuid.uuid4()}{ext}"
-        dest  = STATIC_DIR / fname
+    if supabase:                                      # 走 Supabase
+        data_bytes = await image.read()
+        r = supabase.storage.from_(SUPABASE_BUCKET).upload(
+            f"images/{filename}",
+            io.BytesIO(data_bytes),
+            { "content-type": image.content_type or "application/octet-stream" },
+            upsert=True,
+        )
+        if r.get("error"):
+            raise HTTPException(500, f"Supabase 上传失败: {r['error']['message']}")
+        image_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(
+            f"images/{filename}"
+        )
+        print(f"✓ Supabase 上传成功: images/{filename}\n  公网 URL: {image_url}")
+    else:                                             # 回退到本地 static/
+        dest = STATIC_DIR / filename
         with dest.open("wb") as f:
             shutil.copyfileobj(image.file, f)
-        image_url = f"/static/{fname}"
+        image_url = f"/static/{filename}"
+        print(f"✓ 本地保存图片到: {dest}")
 
-    # ---- 创建新品
-    fig = crud.create_figure(db, payload, image_url)
-    return schemas.Figure.from_orm(fig).copy(update={"qty": 0, "total_sales": 0.0})
+    # ───────── 4. 创建 figure & 首次入库 ─────────
+    fig = crud.create_figure(db, data, image_url)
+    crud.add_movement(db, fig.id, quantity, "IN")
+
+    return (
+        schemas.Figure.from_orm(fig)
+        .copy(update={
+            "qty":         quantity,
+            "total_sales": 0.0,
+        })
+    )
 
 # ---------- 列表 + 选项 ----------
 @app.get("/figures/", response_model=list[schemas.Figure])
@@ -221,3 +243,35 @@ def outbound(mov: schemas.StockMovementCreate, db: Session = Depends(get_db)):
 @app.post("/stock/inbound")          # ← 这里不要写成 "/stock/inbound/"
 def inbound(mov: schemas.StockMovementCreate, db: Session = Depends(get_db)):
     return crud.add_movement(db, mov.figure_id, mov.quantity, "IN")
+
+# ---------- 修改 ----------
+@app.put("/figures/{fig_id}", response_model=schemas.Figure)
+def update_figure_api(
+    fig_id: int,
+    payload: schemas.FigureUpdate,
+    db: Session = Depends(get_db),
+):
+    data    = payload.dict(exclude_unset=True)
+    new_qty = data.pop("qty", None)   # 把 qty 拿出来，其余字段进 data
+    fig = crud.update_figure(db, fig_id, data, new_qty)
+
+    stock, total_sales = (
+        db.query(
+            func.coalesce(func.sum(models.StockMovement.quantity), 0),
+            func.coalesce(
+                func.sum(
+                    models.StockMovement.sale_price *
+                    (-models.StockMovement.quantity)
+                ), 0
+            ),
+        )
+        .filter(models.StockMovement.figure_id == fig_id)
+        .one()
+    )
+
+    return schemas.Figure.from_orm(fig).copy(
+        update={
+            "qty":         int(stock),
+            "total_sales": float(total_sales),
+        }
+    )
