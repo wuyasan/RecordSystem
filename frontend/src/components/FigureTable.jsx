@@ -4,7 +4,7 @@ import {
   deleteFigure,
   inbound,
   outbound,
-  updateFigure,   // ← 新增
+  updateFigure,
   api,
 } from "../api";
 import { Link } from "react-router-dom";
@@ -27,7 +27,11 @@ function EditDialog({ init, onSubmit, onClose }) {
         ))}
         <p>
           <label>成本价</label>
-          <input type="number" value={form.cost_price} onChange={set("cost_price")} />
+          <input
+            type="number"
+            value={form.cost_price}
+            onChange={set("cost_price")}
+          />
         </p>
         <p>
           <label>库存</label>
@@ -45,17 +49,30 @@ export default function FigureTable() {
   /* ---------- 状态 ---------- */
   const [rows, setRows] = useState([]);
   const [sel, setSel] = useState({});
-  const [dialog, setDialog] = useState(null);    // MovementDialog
-  const [edit, setEdit] = useState(null);        // EditDialog
+  const [dialog, setDialog] = useState(null); // MovementDialog
+  const [edit, setEdit] = useState(null); // EditDialog
   const [expanded, setExpanded] = useState(null);
   const [sales, setSales] = useState({});
+  const [zoomId, setZoomId] = useState(null); // ← 被放大的 figureId
+
+  /* 页面滚动锁定（可选） */
+  useEffect(() => {
+    if (zoomId) document.body.classList.add("zoom-lock");
+    else document.body.classList.remove("zoom-lock");
+  }, [zoomId]);
 
   /* ---------- 加载 ---------- */
-  const load = async () => {
+  useEffect(() => {
+    (async () => {
+      const res = await getFigures();
+      setRows(res.data);
+    })();
+  }, []);
+
+  const reload = async () => {
     const res = await getFigures();
     setRows(res.data);
   };
-  useEffect(() => { load(); }, []);
 
   /* ---------- 唯一选项 ---------- */
   const options = useMemo(() => {
@@ -94,7 +111,7 @@ export default function FigureTable() {
     if (!confirm("确定删除？")) return;
     try {
       await deleteFigure(id);
-      load();
+      reload();
     } catch (e) {
       alert(e.response?.data?.detail || "删除失败");
     }
@@ -105,7 +122,7 @@ export default function FigureTable() {
     try {
       const fn = type === "IN" ? inbound : outbound;
       await fn({ figure_id: id, quantity: qty, sale_price: price });
-      await load();
+      await reload();
       if (type === "OUT" && expanded === id) await fetchSales(id);
     } catch (e) {
       alert(e.response?.data?.detail || "操作失败");
@@ -122,16 +139,14 @@ export default function FigureTable() {
   /* ---------- 渲染 ---------- */
   return (
     <>
-      {/* 工具栏 */}
+      {/* ───────── 工具栏 ───────── */}
       <div className="toolbar">
         <Link to="/new">➕ 新增</Link>
         {["manufacturer", "brand", "character", "model_name", "ip"].map((k) => (
           <select
             key={k}
             value={sel[k] || ""}
-            onChange={(e) =>
-              setSel((p) => ({ ...p, [k]: e.target.value || undefined }))
-            }
+            onChange={(e) => setSel((p) => ({ ...p, [k]: e.target.value || undefined }))}
           >
             <option value="">{k}</option>
             {options[k].map((v) => (
@@ -144,7 +159,7 @@ export default function FigureTable() {
         <button onClick={() => setSel({})}>清空</button>
       </div>
 
-      {/* 主表 */}
+      {/* ───────── 主表 ───────── */}
       <table className="fig-table">
         <thead>
           <tr>
@@ -163,8 +178,17 @@ export default function FigureTable() {
         <tbody>
           {filtered.map((r) => (
             <React.Fragment key={r.id}>
+              {/* 主行 */}
               <tr>
-                <td>{r.image_url && <img src={r.image_url} />}</td>
+                <td>
+                  {r.image_url && (
+                    <img
+                      src={r.image_url}
+                      className={zoomId === r.id ? "zoomed" : ""}
+                      onClick={() => setZoomId(zoomId === r.id ? null : r.id)}
+                    />
+                  )}
+                </td>
                 <td>{r.manufacturer}</td>
                 <td>{r.brand}</td>
                 <td>{r.character}</td>
@@ -177,18 +201,14 @@ export default function FigureTable() {
                   <button onClick={() => toggle(r.id)}>
                     {expanded === r.id ? "收起" : "明细"}
                   </button>
-                  <button onClick={() => setDialog({ id: r.id, type: "IN" })}>
-                    入库
-                  </button>
-                  <button onClick={() => setDialog({ id: r.id, type: "OUT" })}>
-                    出库
-                  </button>
+                  <button onClick={() => setDialog({ id: r.id, type: "IN" })}>入库</button>
+                  <button onClick={() => setDialog({ id: r.id, type: "OUT" })}>出库</button>
                   <button onClick={() => setEdit(r)}>✏️ 编辑</button>
                   <button onClick={() => del(r.id)}>删除</button>
                 </td>
               </tr>
 
-              {/* 明细行 */}
+              {/* 展开行：销售明细 */}
               {expanded === r.id && (
                 <tr className="sales-row">
                   <td colSpan={10}>
@@ -226,7 +246,7 @@ export default function FigureTable() {
         </tbody>
       </table>
 
-      {/* 入/出库弹窗 */}
+      {/* ───────── 入/出库弹窗 ───────── */}
       {dialog && (
         <MovementDialog
           type={dialog.type}
@@ -238,16 +258,16 @@ export default function FigureTable() {
         />
       )}
 
-      {/* 编辑弹窗 */}
+      {/* ───────── 编辑弹窗 ───────── */}
       {edit && (
         <EditDialog
           init={edit}
           onSubmit={async (data) => {
             try {
               await updateFigure(edit.id, data);
-              await load();
+              await reload();
               setEdit(null);
-              if (expanded === edit.id) await fetchSales(edit.id); // 库存可能变
+              if (expanded === edit.id) await fetchSales(edit.id);
             } catch (e) {
               alert(e.response?.data?.detail || "更新失败");
             }
