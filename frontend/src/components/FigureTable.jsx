@@ -175,7 +175,6 @@ export default function FigureTable() {
       <td>{r.qty}</td>
       <td>
         <button onClick={() => setDialog({ id: r.id, type: "OUT" })}>出库</button>
-        <button onClick={() => del(r.id)}>删除</button>
       </td>
     </>
   );
