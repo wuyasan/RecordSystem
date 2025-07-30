@@ -10,60 +10,36 @@ import {
 import { Link } from "react-router-dom";
 import MovementDialog from "./MovementDialog";
 
-/* ───────── 辅助：简易编辑弹窗 ───────── */
+/* ───────── 简易编辑弹窗 ───────── */
 function EditDialog({ init, onSubmit, onClose }) {
   const [form, setForm] = useState({ ...init });
   const set = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
-
-  /* 1️⃣ 记录 mousedown 是否发生在遮罩上 */
   const clickStartedOnMask = useRef(false);
 
   return (
     <div
       className="dialog-mask"
-      onMouseDown={(e) => {
-        // 只要按下的就是遮罩本身，就记为 true
-        clickStartedOnMask.current = e.target === e.currentTarget;
-      }}
-      onMouseUp={(e) => {
-        // 按下 & 抬起都在遮罩 → 真正点击遮罩，关闭弹窗
-        if (clickStartedOnMask.current && e.target === e.currentTarget) {
-          onClose();
-        }
-      }}
+      onMouseDown={(e) => (clickStartedOnMask.current = e.target === e.currentTarget)}
+      onMouseUp={(e) =>
+        clickStartedOnMask.current && e.target === e.currentTarget && onClose()
+      }
     >
-      {/* 2️⃣ 对话框阻止事件继续冒泡，防止误触 */}
-      <div
-        className="dialog"
-        onMouseDown={(e) => e.stopPropagation()}
-        onMouseUp={(e) => e.stopPropagation()}
-      >
+      <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
         <h3>编辑条目</h3>
-
         {["manufacturer", "brand", "character", "model_name", "ip"].map((k) => (
           <p key={k}>
             <label>{k}</label>
             <input value={form[k] || ""} onChange={set(k)} />
           </p>
         ))}
-
         <p>
           <label>成本价</label>
-          <input
-            type="number"
-            value={form.cost_price}
-            onChange={set("cost_price")}
-          />
+          <input type="number" value={form.cost_price} onChange={set("cost_price")} />
         </p>
         <p>
           <label>库存</label>
-          <input
-            type="number"
-            value={form.qty}
-            onChange={set("qty")}
-          />
+          <input type="number" value={form.qty} onChange={set("qty")} />
         </p>
-
         <button onClick={() => onSubmit(form)}>保存</button>
         <button onClick={onClose}>取消</button>
       </div>
@@ -74,32 +50,21 @@ function EditDialog({ init, onSubmit, onClose }) {
 /* ───────── 主表组件 ───────── */
 export default function FigureTable() {
   /* ---------- 状态 ---------- */
-  const [rows, setRows] = useState([]);
-  const [sel, setSel] = useState({});
-  const [dialog, setDialog] = useState(null); // MovementDialog
-  const [edit, setEdit] = useState(null); // EditDialog
-  const [expanded, setExpanded] = useState(null);
-  const [sales, setSales] = useState({});
-  const [zoomId, setZoomId] = useState(null); // ← 被放大的 figureId
-
-  /* 页面滚动锁定（可选） */
-  useEffect(() => {
-    if (zoomId) document.body.classList.add("zoom-lock");
-    else document.body.classList.remove("zoom-lock");
-  }, [zoomId]);
+  const [rows, setRows]     = useState([]);
+  const [sel, setSel]       = useState({});
+  const [dialog, setDialog] = useState(null);        // MovementDialog
+  const [edit, setEdit]     = useState(null);        // EditDialog
+  const [expanded, setExpanded] = useState(null);    // 明细
+  const [sales, setSales]   = useState({});
+  const [zoomId, setZoomId] = useState(null);
+  const [compact, setCompact] = useState(false);     // ← 视图切换
 
   /* ---------- 加载 ---------- */
-  useEffect(() => {
-    (async () => {
-      const res = await getFigures();
-      setRows(res.data);
-    })();
-  }, []);
-
   const reload = async () => {
     const res = await getFigures();
     setRows(res.data);
   };
+  useEffect(() => { reload(); }, []);
 
   /* ---------- 唯一选项 ---------- */
   const options = useMemo(() => {
@@ -119,23 +84,19 @@ export default function FigureTable() {
       rows.filter(
         (r) =>
           (!sel.manufacturer || r.manufacturer === sel.manufacturer) &&
-          (!sel.brand || r.brand === sel.brand) &&
-          (!sel.character || r.character === sel.character) &&
-          (!sel.model_name || r.model_name === sel.model_name) &&
-          (!sel.ip || r.ip === sel.ip)
+          (!sel.brand        || r.brand        === sel.brand) &&
+          (!sel.character    || r.character    === sel.character) &&
+          (!sel.model_name   || r.model_name   === sel.model_name) &&
+          (!sel.ip           || r.ip           === sel.ip)
       ),
     [rows, sel]
   );
 
-  const { totalQty, totalCost } = useMemo(() => {
-    return filtered.reduce(
-      (acc, r) => {
-        acc.totalQty  += r.qty;
-        return acc;
-      },
-      { totalQty: 0}
-    );
-  }, [filtered]);
+  /* ---------- 库存总量 ---------- */
+  const totalQty = useMemo(
+    () => filtered.reduce((acc, r) => acc + r.qty, 0),
+    [filtered]
+  );
 
   /* ---------- 明细 ---------- */
   const fetchSales = async (id) => {
@@ -146,24 +107,16 @@ export default function FigureTable() {
   /* ---------- 删除 ---------- */
   const del = async (id) => {
     if (!confirm("确定删除？")) return;
-    try {
-      await deleteFigure(id);
-      reload();
-    } catch (e) {
-      alert(e.response?.data?.detail || "删除失败");
-    }
+    await deleteFigure(id);
+    reload();
   };
 
   /* ---------- 入 / 出库 ---------- */
   const move = async (id, type, qty, price = null) => {
-    try {
-      const fn = type === "IN" ? inbound : outbound;
-      await fn({ figure_id: id, quantity: qty, sale_price: price });
-      await reload();
-      if (type === "OUT" && expanded === id) await fetchSales(id);
-    } catch (e) {
-      alert(e.response?.data?.detail || "操作失败");
-    }
+    const fn = type === "IN" ? inbound : outbound;
+    await fn({ figure_id: id, quantity: qty, sale_price: price });
+    await reload();
+    if (type === "OUT" && expanded === id) await fetchSales(id);
   };
 
   /* ---------- 折叠 ---------- */
@@ -173,98 +126,118 @@ export default function FigureTable() {
     setExpanded(id);
   };
 
+  /* ---------- 列表渲染辅助 ---------- */
+  const renderFullRow = (r) => (
+    <>
+      <td>
+        {r.image_url && (
+          <img
+            src={r.image_url}
+            className={zoomId === r.id ? "zoomed" : ""}
+            onClick={() => setZoomId(zoomId === r.id ? null : r.id)}
+          />
+        )}
+      </td>
+      <td>{r.manufacturer}</td>
+      <td>{r.brand}</td>
+      <td>{r.character}</td>
+      <td>{r.model_name}</td>
+      <td>{r.ip || "-"}</td>
+      <td>{r.cost_price}</td>
+      <td>{r.qty}</td>
+      <td>{r.total_sales.toFixed(2)}</td>
+      <td>
+        <button onClick={() => toggle(r.id)}>
+          {expanded === r.id ? "收起" : "明细"}
+        </button>
+        <button onClick={() => setDialog({ id: r.id, type: "IN" })}>入库</button>
+        <button onClick={() => setDialog({ id: r.id, type: "OUT" })}>出库</button>
+        <button onClick={() => setEdit(r)}>✏️ 编辑</button>
+        <button onClick={() => del(r.id)}>删除</button>
+      </td>
+    </>
+  );
+
+  const renderCompactRow = (r) => (
+    <>
+      <td>
+        {r.image_url && (
+          <img
+            src={r.image_url}
+            className={zoomId === r.id ? "zoomed" : ""}
+            onClick={() => setZoomId(zoomId === r.id ? null : r.id)}
+          />
+        )}
+      </td>
+      <td>{r.character}</td>
+      <td>{r.model_name}</td>
+      <td>{r.ip || "-"}</td>
+      <td>{r.qty}</td>
+      <td>
+        <button onClick={() => setDialog({ id: r.id, type: "OUT" })}>出库</button>
+        <button onClick={() => del(r.id)}>删除</button>
+      </td>
+    </>
+  );
+
+  /* ---------- 视图相关表头 ---------- */
+  const theadFull = (
+    <tr>
+      <th>图片</th><th>厂家</th><th>品牌</th><th>角色</th><th>造型</th><th>IP</th>
+      <th>成本</th><th>库存</th><th>总销售额</th><th>操作</th>
+    </tr>
+  );
+  const theadCompact = (
+    <tr>
+      <th>图片</th><th>角色</th><th>造型</th><th>IP</th><th>库存</th><th>操作</th>
+    </tr>
+  );
+
   /* ---------- 渲染 ---------- */
   return (
     <>
       {/* ───────── 工具栏 ───────── */}
       <div className="toolbar">
         <Link to="/new">➕ 新增</Link>
-        {["manufacturer", "brand", "character", "model_name", "ip"].map((k) => (
-          <select
-            key={k}
-            value={sel[k] || ""}
-            onChange={(e) => setSel((p) => ({ ...p, [k]: e.target.value || undefined }))}
-          >
+        {["manufacturer","brand","character","model_name","ip"].map((k) => (
+          <select key={k}
+                  value={sel[k] || ""}
+                  onChange={(e) => setSel((p) => ({ ...p, [k]: e.target.value || undefined }))}>
             <option value="">{k}</option>
             {options[k].map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
+              <option key={v} value={v}>{v}</option>
             ))}
           </select>
         ))}
         <button onClick={() => setSel({})}>清空</button>
+        <button onClick={() => setCompact((v) => !v)}>
+          {compact ? "切到完整视图" : "切到简洁视图"}
+        </button>
       </div>
 
       <div className="totals-bar">
-        <strong>库存总量：</strong>{totalQty}&nbsp;&nbsp;
+        <strong>库存总量：</strong>{totalQty}
       </div>
 
-      {/* ───────── 主表 ───────── */}
+      {/* ───────── 表格 ───────── */}
       <table className="fig-table">
-        <thead>
-          <tr>
-            <th>图片</th>
-            <th>厂家</th>
-            <th>品牌</th>
-            <th>角色</th>
-            <th>造型</th>
-            <th>IP</th>
-            <th>成本</th>
-            <th>库存</th>
-            <th>总销售额</th>
-            <th>操作</th>
-          </tr>
-        </thead>
+        <thead>{compact ? theadCompact : theadFull}</thead>
         <tbody>
           {filtered.map((r) => (
             <React.Fragment key={r.id}>
-              {/* 主行 */}
-              <tr>
-                <td>
-                  {r.image_url && (
-                    <img
-                      src={r.image_url}
-                      className={zoomId === r.id ? "zoomed" : ""}
-                      onClick={() => setZoomId(zoomId === r.id ? null : r.id)}
-                    />
-                  )}
-                </td>
-                <td>{r.manufacturer}</td>
-                <td>{r.brand}</td>
-                <td>{r.character}</td>
-                <td>{r.model_name}</td>
-                <td>{r.ip || "-"}</td>
-                <td>{r.cost_price}</td>
-                <td>{r.qty}</td>
-                <td>{r.total_sales.toFixed(2)}</td>
-                <td>
-                  <button onClick={() => toggle(r.id)}>
-                    {expanded === r.id ? "收起" : "明细"}
-                  </button>
-                  <button onClick={() => setDialog({ id: r.id, type: "IN" })}>入库</button>
-                  <button onClick={() => setDialog({ id: r.id, type: "OUT" })}>出库</button>
-                  <button onClick={() => setEdit(r)}>✏️ 编辑</button>
-                  <button onClick={() => del(r.id)}>删除</button>
-                </td>
-              </tr>
+              <tr>{compact ? renderCompactRow(r) : renderFullRow(r)}</tr>
 
-              {/* 展开行：销售明细 */}
-              {expanded === r.id && (
+              {/* 明细只在完整视图里出现 */}
+              {!compact && expanded === r.id && (
                 <tr className="sales-row">
                   <td colSpan={10}>
                     <table className="sales-table">
                       <thead>
-                        <tr>
-                          <th>单价</th>
-                          <th>数量</th>
-                          <th>总价</th>
-                          <th>出售时间</th>
-                        </tr>
+                        <tr><th>单价</th><th>数量</th><th>总价</th><th>出售时间</th></tr>
                       </thead>
                       <tbody>
                         {sales[r.id]?.length ? (
-                          sales[r.id].map((s, i) => (
+                          sales[r.id].map((s,i)=>(
                             <tr key={i}>
                               <td>{(+s.sale_price).toFixed(2)}</td>
                               <td>{s.quantity}</td>
@@ -273,9 +246,7 @@ export default function FigureTable() {
                             </tr>
                           ))
                         ) : (
-                          <tr>
-                            <td colSpan={4}>暂无销售记录</td>
-                          </tr>
+                          <tr><td colSpan={4}>暂无销售记录</td></tr>
                         )}
                       </tbody>
                     </table>
@@ -304,14 +275,10 @@ export default function FigureTable() {
         <EditDialog
           init={edit}
           onSubmit={async (data) => {
-            try {
-              await updateFigure(edit.id, data);
-              await reload();
-              setEdit(null);
-              if (expanded === edit.id) await fetchSales(edit.id);
-            } catch (e) {
-              alert(e.response?.data?.detail || "更新失败");
-            }
+            await updateFigure(edit.id, data);
+            await reload();
+            setEdit(null);
+            if (expanded === edit.id) await fetchSales(edit.id);
           }}
           onClose={() => setEdit(null)}
         />
