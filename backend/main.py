@@ -57,6 +57,7 @@ def get_db():
     finally:
         db.close()
 
+# backend/main.py
 @app.post("/figures/", response_model=schemas.Figure)
 async def create_figure(
     manufacturer: str = Form(...),
@@ -64,12 +65,12 @@ async def create_figure(
     character:    str = Form(...),
     model_name:   str = Form(...),
     cost_price:   float = Form(...),
-    ip: str | None      = Form(None),
+    ip:           str | None = Form(None),
+    quantity:     int = Form(1),                 # ← 新品入库数量（默认为 1）
     image: UploadFile | None = File(None),
     db: Session = Depends(get_db),
 ):
-    # ---- 业务字段：用 payload，不要用 data 防止被文件字节覆盖
-    payload = dict(
+    data = dict(
         manufacturer=manufacturer,
         brand=brand,
         character=character,
@@ -78,61 +79,41 @@ async def create_figure(
         ip=ip,
     )
 
-    # ---- 查重：完全相同则库存 +1 并返回最新汇总
-    existed = crud.get_same_figure(db, payload)
-    if existed:
-        crud.add_movement(db, existed.id, 1, "IN")
-        stock, total_sales = (
-            db.query(
-                func.coalesce(func.sum(models.StockMovement.quantity), 0),
-                func.coalesce(
-                    func.sum(
-                        models.StockMovement.sale_price * (-models.StockMovement.quantity)
-                    ),
-                    0,
-                ),
-            )
-            .filter(models.StockMovement.figure_id == existed.id)
-            .one()
-        )
-        return schemas.Figure.from_orm(existed).copy(
-            update={"qty": int(stock), "total_sales": float(total_sales)}
+    # ---------- 查重 ----------
+    fig = crud.get_same_figure(db, data)
+    if fig:                                      # ① 老品：直接加库存
+        crud.add_movement(db, fig.id, quantity, "IN")
+        stock = crud.get_stock(db, fig.id)
+        total = crud.get_sales_total(db, fig.id)
+        return schemas.Figure.from_orm(fig).copy(
+            update={"qty": stock, "total_sales": total}
         )
 
-    # ---- 新品必须有图片
-    if image is None or not image.filename.strip():
+    # ---------- 新品但没传图片 ----------
+    if image is None or image.filename.strip() == "":
         raise HTTPException(400, "新品必须上传图片")
 
-    image_url: str | None = None
-
-    # 优先走 Supabase
+    # ---------- 上传 / 保存图片 ----------
+    ext      = pathlib.Path(image.filename).suffix
+    filename = f"{uuid.uuid4()}{ext}"
     if supabase:
-        file_bytes = await image.read()
-        ext = pathlib.Path(image.filename).suffix or ".jpg"
-        key = f"images/{uuid.uuid4()}{ext}"
-
-        # 上传
-        up = supabase.storage.from_(SUPABASE_BUCKET).upload(key, file_bytes)
-        # 这里不依赖 SDK 的返回结构，自己拼公开 URL
-        pub_url = supabase_public_url(key)
-        print(f"✓ Supabase 上传成功: {key}\n  公网 URL: {pub_url}")
-        image_url = pub_url
-
-        # 为了兼容后续逻辑，把文件指针复位（虽然之后不用）
-        image.file.seek(0)
-
-    # 若没配置 Supabase，则落地到本地 static
-    if image_url is None:
-        ext = pathlib.Path(image.filename).suffix
-        fname = f"{uuid.uuid4()}{ext}"
-        dest  = STATIC_DIR / fname
+        data_bytes = await image.read()
+        bucket = supabase.storage.from_(SUPABASE_BUCKET)
+        bucket.upload(f"images/{filename}", data_bytes)        # ← upload 已自动覆盖
+        image_url = bucket.get_public_url(f"images/{filename}")
+    else:
+        dest = STATIC_DIR / filename
         with dest.open("wb") as f:
             shutil.copyfileobj(image.file, f)
-        image_url = f"/static/{fname}"
+        image_url = f"/static/{filename}"
 
-    # ---- 创建新品
-    fig = crud.create_figure(db, payload, image_url)
-    return schemas.Figure.from_orm(fig).copy(update={"qty": 0, "total_sales": 0.0})
+    # ---------- 创建新品 ----------
+    fig = crud.create_figure(db, data, image_url)              # ② 先写 Figure
+    crud.add_movement(db, fig.id, quantity, "IN")              # ③ 再写首批库存
+
+    return schemas.Figure.from_orm(fig).copy(
+        update={"qty": quantity, "total_sales": 0}
+    )
 
 # ---------- 列表 + 选项 ----------
 @app.get("/figures/", response_model=list[schemas.Figure])

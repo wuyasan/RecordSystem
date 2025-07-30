@@ -59,17 +59,14 @@ def delete_figure(db: Session, figure_id: int):
     db.commit()
 
 def get_same_figure(db, data: dict):
-    return (
-        db.query(models.Figure)
-        .filter_by(
-            manufacturer=data["manufacturer"],
-            brand=data["brand"],
-            character=data["character"],
-            model_name=data["model_name"],
-            cost_price=data["cost_price"],
-        )
-        .first()
-    )
+    return db.query(models.Figure).filter_by(
+        manufacturer=data["manufacturer"],
+        brand=data["brand"],
+        character=data["character"],
+        model_name=data["model_name"],
+        cost_price=data["cost_price"],
+        ip=data.get("ip"),             # ★ 加上这一行，避免不同 IP 混淆
+    ).first()
 
 def update_figure(db: Session, fig_id: int,
                   data: dict, new_qty: int | None = None):

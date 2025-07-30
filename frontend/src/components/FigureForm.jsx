@@ -10,13 +10,9 @@ export default function FigureForm() {
   const submit = async (e) => {
     e.preventDefault();
     const fd = new FormData(ref.current);
-    fd.append("quantity", qty);               // 追加数量
-    try {
-      await createFigure(fd);
-      nav("/");                              // 成功后返回主页
-    } catch (err) {
-      alert(err.response?.data?.detail || "保存失败");
-    }
+    fd.append("quantity", qty);      // ★ 跟后端参数同名
+    await createFigure(fd);
+    nav("/", { state: { refresh: true } });   // 触发首页刷新（上轮已实现）
   };
 
   return (
@@ -34,8 +30,7 @@ export default function FigureForm() {
           type="number"
           min="1"
           value={qty}
-          onChange={(e) => setQty(e.target.value)}
-          required
+          onChange={(e) => setQty(parseInt(e.target.value, 10) || 1)}
         />
       </label>
 
