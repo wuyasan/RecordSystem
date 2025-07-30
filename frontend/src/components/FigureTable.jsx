@@ -127,6 +127,16 @@ export default function FigureTable() {
     [rows, sel]
   );
 
+  const { totalQty, totalCost } = useMemo(() => {
+    return filtered.reduce(
+      (acc, r) => {
+        acc.totalQty  += r.qty;
+        return acc;
+      },
+      { totalQty: 0}
+    );
+  }, [filtered]);
+
   /* ---------- 明细 ---------- */
   const fetchSales = async (id) => {
     const res = await api.get(`/figures/${id}/sales`);
@@ -184,6 +194,10 @@ export default function FigureTable() {
           </select>
         ))}
         <button onClick={() => setSel({})}>清空</button>
+      </div>
+
+      <div className="totals-bar">
+        <strong>库存总量：</strong>{totalQty}&nbsp;&nbsp;
       </div>
 
       {/* ───────── 主表 ───────── */}
