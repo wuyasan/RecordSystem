@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import {
   getFigures,
   deleteFigure,
@@ -15,16 +15,38 @@ function EditDialog({ init, onSubmit, onClose }) {
   const [form, setForm] = useState({ ...init });
   const set = (k) => (e) => setForm((p) => ({ ...p, [k]: e.target.value }));
 
+  /* 1️⃣ 记录 mousedown 是否发生在遮罩上 */
+  const clickStartedOnMask = useRef(false);
+
   return (
-    <div className="dialog-mask" onClick={onClose}>
-      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="dialog-mask"
+      onMouseDown={(e) => {
+        // 只要按下的就是遮罩本身，就记为 true
+        clickStartedOnMask.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        // 按下 & 抬起都在遮罩 → 真正点击遮罩，关闭弹窗
+        if (clickStartedOnMask.current && e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      {/* 2️⃣ 对话框阻止事件继续冒泡，防止误触 */}
+      <div
+        className="dialog"
+        onMouseDown={(e) => e.stopPropagation()}
+        onMouseUp={(e) => e.stopPropagation()}
+      >
         <h3>编辑条目</h3>
+
         {["manufacturer", "brand", "character", "model_name", "ip"].map((k) => (
           <p key={k}>
             <label>{k}</label>
             <input value={form[k] || ""} onChange={set(k)} />
           </p>
         ))}
+
         <p>
           <label>成本价</label>
           <input
@@ -35,8 +57,13 @@ function EditDialog({ init, onSubmit, onClose }) {
         </p>
         <p>
           <label>库存</label>
-          <input type="number" value={form.qty} onChange={set("qty")} />
+          <input
+            type="number"
+            value={form.qty}
+            onChange={set("qty")}
+          />
         </p>
+
         <button onClick={() => onSubmit(form)}>保存</button>
         <button onClick={onClose}>取消</button>
       </div>
